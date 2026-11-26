@@ -1,0 +1,97 @@
+#include "Slic3r/App/ExportDestinationButton.hpp"
+
+#include "Slic3r/App/Yoga/Menu.hpp"
+#include "Slic3r/App/Yoga/MenuItem.hpp"
+#include "Slic3r/App/ConnectServiceName.hpp"
+#include "Slic3r/Biz/I18N/I18N.hpp"
+#include "Slic3r/Biz/Network/ServiceConfig.hpp"
+
+namespace Slic3r::App {
+
+using Biz::ExportDestination::ExportDestination;
+
+namespace {
+
+std::string connect_label(bool selectable)
+{
+    if (!selectable) {
+        // TRN Export destination: upload G-code to Prusa Connect, shown disabled while nobody is signed in.
+        return Biz::_u8L("Prusa Connect");
+    }
+    if (Biz::Network::ServiceConfig::instance().is_connect_local()) {
+        return connect_service_name();
+    }
+    // TRN Export destination: upload G-code to the Prusa Connect cloud service.
+    return Biz::_u8L("Prusa Connect (cloud)");
+}
+
+std::string destination_label(
+    const Biz::ExportDestination::ExportDestinationInteractor& interactor,
+    ExportDestination destination
+)
+{
+    switch (destination) {
+    // TRN Export destination: save G-code to a folder on this computer.
+    case ExportDestination::LocalDrive: return Biz::_u8L("Local drive");
+    // TRN Export destination: save G-code to a USB drive or SD card.
+    case ExportDestination::RemovableDrive: return Biz::_u8L("Removable drive");
+    case ExportDestination::Connect: return connect_label(interactor.can_select(destination));
+    // TRN Export destination: upload G-code directly to the selected printer.
+    case ExportDestination::PrintHost: return Biz::_u8L("Printer host");
+    }
+    return {};
+}
+
+Render::Icon destination_icon(ExportDestination destination)
+{
+    switch (destination) {
+    case ExportDestination::LocalDrive: return Render::Icon::ExportToLocal;
+    case ExportDestination::RemovableDrive: return Render::Icon::ExportToSD;
+    case ExportDestination::Connect: return Render::Icon::ConnectUpload;
+    case ExportDestination::PrintHost: return Render::Icon::PhysicalPrinterIcon;
+    }
+    return Render::Icon::None;
+}
+
+} // namespace
+
+ExportDestinationButton::ExportDestinationButton(Biz::ExportDestination::ExportDestinationInteractor& interactor) :
+    Yoga::LayoutButton(
+        destination_label(interactor, interactor.selected()),
+        destination_icon(interactor.selected())
+    ),
+    m_listener_scope(interactor, *this),
+    m_interactor(interactor)
+{
+    set_object_name("ExportDestinationButton");
+    m_menu = emplace_back<Yoga::Menu>("export_destination_menu", Yoga::Position::Left);
+
+    callbacks().action = [this]() { open_menu(); };
+}
+
+void ExportDestinationButton::on_export_destination_changed()
+{
+    refresh();
+}
+
+void ExportDestinationButton::refresh()
+{
+    set_label(destination_label(m_interactor, m_interactor.selected()));
+    set_icon(destination_icon(m_interactor.selected()));
+}
+
+void ExportDestinationButton::open_menu()
+{
+    m_menu->clear();
+    for (ExportDestination destination : Biz::ExportDestination::ALL_EXPORT_DESTINATIONS) {
+        Yoga::MenuItem* item = m_menu->append_item(
+            destination_label(m_interactor, destination),
+            destination_icon(destination)
+        );
+        item->callbacks().action = [this, destination]() { m_interactor.select(destination); };
+        item->set_enabled(m_interactor.can_select(destination));
+    }
+    m_menu->open();
+}
+
+} // namespace Slic3r::App

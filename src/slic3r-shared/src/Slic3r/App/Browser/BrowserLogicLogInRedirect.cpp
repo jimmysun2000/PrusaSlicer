@@ -1,0 +1,111 @@
+#include "Slic3r/App/Browser/BrowserLogicLogInRedirect.hpp"
+
+#include "Slic3r/App/AppServices.hpp"
+#include "Slic3r/App/Browser/BrowserLogicConnectLocalLogIn.hpp"
+#include "Slic3r/App/IDialogManager.hpp"
+#include "Slic3r/Biz/ProjectInteractor.hpp"
+#include "Slic3r/Biz/Network/ServiceConfig.hpp"
+#include "Slic3r/Biz/UserAccount/UserAccountInteractor.hpp"
+#include "Slic3r/Log.hpp"
+
+#include <nlohmann/json.hpp>
+
+namespace Slic3r::App::Browser {
+
+BrowserLogicLogInRedirect::BrowserLogicLogInRedirect(Biz::UserAccount::UserAccountInteractor& user_account) :
+    AbstractBrowserLogic({}, {"PrusaSlicerWebviewMessage"}, "login_before_redirect"),
+    m_user_account(user_account)
+{
+    set_title("Sign in");
+}
+
+std::vector<BrowserLogicCommand> BrowserLogicLogInRedirect::on_loaded_webview_event(const std::string& url)
+{
+    if (url.empty())
+        return {};
+
+    std::vector<BrowserLogicCommand> result;
+
+    if (url.find("/web/" + m_loading_html) != std::string::npos && m_load_default_url) {
+        m_load_default_url = false;
+        m_redirect_url     = m_user_account.on_log_in_request("en", true);
+        return {
+            {BrowserLogicCommandType::RegisterPrusaSlicerURL, std::string()},
+            {BrowserLogicCommandType::LoadResourcesPage, "login_redirected"},
+            {BrowserLogicCommandType::OpenExternalBrowserForced, m_redirect_url}
+        };
+    }
+    return {};
+}
+
+std::vector<BrowserLogicCommand> BrowserLogicLogInRedirect::on_script_message_webview_event(const std::string& message)
+{
+    try {
+        nlohmann::json j = nlohmann::json::parse(message);
+        if (j.contains("event") && j["event"].is_string() && j["event"].get<std::string>() == "reopenLogInBrowser")
+        {
+            return {{BrowserLogicCommandType::OpenExternalBrowserForced, m_redirect_url}};
+        }
+        if (j.contains("event") && j["event"].is_string() && j["event"].get<std::string>() == "openLoginPage")
+        {
+            return {{BrowserLogicCommandType::LoadURL, m_user_account.on_log_in_request("en", true)}};
+        }
+    } catch (const nlohmann::json::exception& e) {
+        SPDLOG_ERROR("Could not parse WebView message. {}", e.what());
+        return {};
+    }
+    return {};
+}
+
+std::vector<BrowserLogicCommand> BrowserLogicLogInRedirect::on_user_account_id_success(bool is_refresh, const std::string& current_url)
+{
+    return {{BrowserLogicCommandType::EndModalOK, {}}};
+}
+
+std::vector<BrowserLogicCommand>
+BrowserLogicLogInRedirect::on_navigation_request_webview_event(const std::string& url, const std::string& current_url)
+{
+    if (url.find("prusaslicer") == 0) {
+        m_user_account.on_log_in_code_response(url);
+
+        return {
+            {BrowserLogicCommandType::DeleteCookiesWithCounter,
+             Biz::Network::ServiceConfig::instance().account_url()},
+            {BrowserLogicCommandType::DeleteCookiesWithCounter, "https://accounts.google.com"},
+            {BrowserLogicCommandType::DeleteCookiesWithCounter, "https://appleid.apple.com"},
+            {BrowserLogicCommandType::DeleteCookiesWithCounter, "https://facebook.com"}
+        };
+    }
+
+    if (url.find("accounts.google.com") != std::string::npos || url.find("appleid.apple.com") != std::string::npos || url.find("facebook.com") != std::string::npos)
+    {
+        return {
+            {BrowserLogicCommandType::RegisterPrusaSlicerURL, std::string()}, 
+            {BrowserLogicCommandType::OpenExternalBrowserForced, url}
+        };
+    }
+    return {};
+}
+
+std::unique_ptr<AbstractBrowserLogic>
+make_log_in_logic(Biz::UserAccount::UserAccountInteractor& user_account)
+{
+    if (user_account.is_connect_local_account()) {
+        return std::make_unique<BrowserLogicConnectLocalLogIn>(user_account);
+    }
+    return std::make_unique<BrowserLogicLogInRedirect>(user_account);
+}
+
+void show_log_in_dialog(Biz::ProjectInteractor& project_interactor)
+{
+    Biz::UserAccount::UserAccountInteractor& user_account = project_interactor.user_account_interactor();
+    AppServices::instance().dialog_manager().show_webview_dialog(
+        make_log_in_logic(user_account),
+        &project_interactor
+    );
+    if (project_interactor.raise_app_fn() && !user_account.is_connect_local_account()) {
+        project_interactor.raise_app_fn()();
+    }
+}
+
+} // namespace Slic3r::App::Browser

@@ -1,0 +1,198 @@
+#pragma once
+
+#include "Slic3r/Domain/Config.hpp"
+#include "Slic3r/App/AppSettingsAdvanced.hpp"
+
+#include <optional>
+#include <string>
+#include "tl/expected.hpp"
+
+namespace Slic3r::Biz::Network {
+enum class ServiceMode;
+struct ServerTrust;
+} // namespace Slic3r::Biz::Network
+
+namespace Slic3r::App {
+
+/**
+ * @brief Which account the app signs in to and whose printers the Connect tab shows.
+ */
+enum class AccountService
+{
+    None,
+    PrusaAccount,
+    ConnectLocal
+};
+
+enum class GraphicsQuality
+{
+    Legacy,
+    Low,
+    Medium,
+    High
+};
+
+enum class MouseNavigationScheme
+{
+    PrusaSlicer,
+    Tinkercad,
+    Blender,
+    SolidWorks,
+    Fusion
+};
+
+enum class HyperlinkPolicy
+{
+    Ask,
+    AlwaysOpen,
+    NeverOpen
+};
+
+class AppSettings : public Domain::ConfigBox
+{
+public:
+    AppSettings(const Domain::ConfigDefinitions& defs_appconfig);
+};
+
+class AppConfig {
+public:
+    AppConfig();
+    ~AppConfig() { save(); }
+
+    static std::unique_ptr<AppConfig> create_app_config();
+
+    void set_filename(const std::string& filename) { m_filename = filename; }
+    
+    bool save() const;
+
+    template<typename T>
+    T get(const std::string_view key) const {
+        return m_app_settings.items.opt(key).get<T>();
+    }
+
+    template<typename T>
+    void set(const std::string_view key, T value) {
+        m_app_settings.items.opt(key).set(value);
+    }
+
+    const AppSettings& get_config_box() const { return m_app_settings; }
+    AppSettings* get_config_box_ptr() { return &m_app_settings; }
+
+    const AppSettingsAdvanced& app_settings_advanced() const;
+    AppSettingsAdvanced& app_settings_advanced();
+
+    bool is_webkit_available() const;
+    bool is_printables_enabled() const;
+    /**
+     * @brief Updates app_config item values to current version
+     *
+     * This is the place where to put all handling of outdated
+     * AppConfig values. If you need to update new default
+     * value without user, this is the place to put it.
+     */
+    static void handle_legacy_config(AppConfig& app_config);
+
+    /**
+     * @brief The active account service: none when neither "enable_prusa_account" nor
+     * "enable_connect_local" is on, the enabled one when only one is, and the
+     * "account_service" setting when both are.
+     */
+    AccountService account_service() const;
+
+    bool are_both_account_services_enabled() const;
+
+    /**
+     * @brief An account service is enabled (and WebKit is available), whatever its server. The
+     * Connect tab and the account button exist exactly then; on-premise without a valid server
+     * the tab shows its setup page.
+     */
+    bool is_account_service_enabled() const;
+
+    /**
+     * @brief is_account_service_enabled() and the account has somewhere to sign in: online, or a
+     * valid Connect Local server. Only then the account communication runs.
+     */
+    bool is_account_usable() const;
+
+    /**
+     * @brief Connect Local (a Prusa Connect on-premise server) when account_service() is ConnectLocal,
+     * else Online.
+     */
+    Biz::Network::ServiceMode service_mode() const;
+
+    /**
+     * @brief Connect Local server URL as entered by the user, the "connect_local_url" setting.
+     */
+    std::string connect_local_url() const;
+
+    /**
+     * @brief The configured Prusa Connect on-premise server, normalized, whatever service is
+     * active. nullopt when "connect_local_url" is empty or not a usable URL.
+     */
+    std::optional<std::string> connect_local_server() const;
+
+    /**
+     * @brief Pushes the service mode settings, Connect Local certificate trust included, to
+     * Biz::Network::ServiceConfig.
+     * The user account must be logged out (disabled) when the mode changes at runtime.
+     */
+    void apply_service_mode() const;
+
+    /**
+     * @brief Trust of the Connect Local server certificate (connect_local_trust*), System when none
+     * is stored. Applies to its server_url only, see Biz::Network::ServerTrustStore::apply().
+     */
+    Biz::Network::ServerTrust connect_local_trust() const;
+
+    /**
+     * @brief The PEM file of connect_local_trust() in the data directory.
+     */
+    static std::string connect_local_trust_pem_path();
+
+    bool is_sentry_enabled() const;
+    bool is_sentry_available() const;
+
+    /**
+     * @brief Records a crash and disables a related configuration option.
+     *
+     * @param crash_reason Identifier of the detected crash cause.
+     * @param disabled_option_key Configuration option to disable to prevent repeated crashes.
+     */
+    void record_crash(const std::string& crash_reason, const std::string& disabled_option_key);
+
+    /**
+     * @brief Resolves a previously recorded crash.
+     *
+     * Clears or updates the stored crash reason and optionally restores
+     * a previously disabled configuration option.
+     *
+     * @param resolved_crash_reason New crash reason to store.
+     *                              If empty, the crash state is cleared.
+     * @param restored_option_key   Configuration option to re-enable.
+     *                              If empty, no option is restored.
+     */
+    void resolve_crash(const std::string& resolved_crash_reason = std::string(),
+        const std::string& restored_option_key = std::string());
+
+
+private:
+    const Domain::ConfigDefinitions m_defs_appconfig;
+    AppSettings m_app_settings;
+    AppSettingsAdvanced m_app_settings_advanced;
+    std::string m_filename;
+
+    /**
+     * @brief Loads the application configuration from the specified file.
+     *
+     * If the file is not found, a default AppConfig is returned.
+     * If the file is present but cannot be read, an error is returned.
+     *
+     * @param path The path to the configuration file.
+     * @return A tl::expected containing the AppConfig on success, or an error message on failure.
+     */
+    static tl::expected<std::unique_ptr<AppConfig>, std::string> load_appconfig(
+        const std::string& filename
+    );
+};
+
+} // namespace Slic3r::App
